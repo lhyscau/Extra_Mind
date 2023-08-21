@@ -37,5 +37,5 @@ class BaseAnswer(ABC):
 
     def generatorAnswer(self, prompt: str,
                         history: List[List[str]] = [],
-                        streaming: bool = False):
+                        streaming: bool = True):# lhyadd pre false
         pass

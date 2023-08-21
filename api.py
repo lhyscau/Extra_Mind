@@ -8,11 +8,14 @@ import asyncio
 import nltk
 import pydantic
 import uvicorn
-from fastapi import Body, FastAPI, File, Form, Query, UploadFile, WebSocket
+from fastapi import Body, FastAPI, File, Form, Query, UploadFile, WebSocket, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware import Middleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from typing_extensions import Annotated
-from starlette.responses import RedirectResponse
+from starlette.responses import RedirectResponse, StreamingResponse#lhy
 
 from chains.local_doc_qa import LocalDocQA
 from configs.model_config import (KB_ROOT_PATH, EMBEDDING_DEVICE,
@@ -305,6 +308,11 @@ async def local_doc_chat(
         )
 
 
+
+
+
+
+
 async def bing_search_chat(
         question: str = Body(..., description="Question", example="工伤保险是什么？"),
         history: Optional[List[List[str]]] = Body(
@@ -348,62 +356,206 @@ async def chat(
             ],
         ),
 ):
-    for answer_result in local_doc_qa.llm.generatorAnswer(prompt=question, history=history,
-                                                          streaming=True):
-        resp = answer_result.llm_output["answer"]
-        history = answer_result.history
-        pass
+    # for answer_result in local_doc_qa.llm.generatorAnswer(prompt=question, history=history,
+    #                                                       streaming=True):
+    #     resp = answer_result.llm_output["answer"]
+    #     history = answer_result.history
+    #     # pass
+    #
+    #
+    # return ChatMessage(
+    #     question=question,
+    #     response=resp,
+    #     history=history,
+    #     source_documents=[],
+    # )
 
-    return ChatMessage(
-        question=question,
-        response=resp,
-        history=history,
-        source_documents=[],
-    )
-
-
-async def stream_chat(websocket: WebSocket, knowledge_base_id: str):
-    await websocket.accept()
-    turn = 1
-    while True:
-        input_json = await websocket.receive_json()
-        question, history, knowledge_base_id = input_json["question"], input_json["history"], input_json[
-            "knowledge_base_id"]
-        vs_path = get_vs_path(knowledge_base_id)
-
-        if not os.path.exists(vs_path):
-            await websocket.send_json({"error": f"Knowledge base {knowledge_base_id} not found"})
-            await websocket.close()
-            return
-
-        await websocket.send_json({"question": question, "turn": turn, "flag": "start"})
-
+    async def event_stream():
         last_print_len = 0
-        for resp, history in local_doc_qa.get_knowledge_based_answer(
-                query=question, vs_path=vs_path, chat_history=history, streaming=True
-        ):
-            await asyncio.sleep(0)
-            await websocket.send_text(resp["result"][last_print_len:])
-            last_print_len = len(resp["result"])
+        nonlocal history
 
-        source_documents = [
-            f"""出处 [{inum + 1}] {os.path.split(doc.metadata['source'])[-1]}：\n\n{doc.page_content}\n\n"""
-            f"""相关度：{doc.metadata['score']}\n\n"""
-            for inum, doc in enumerate(resp["source_documents"])
-        ]
+        for answer_result in local_doc_qa.llm.generatorAnswer(prompt=question, history=history, streaming=True):
+            resp = answer_result.llm_output["answer"]
+            history = answer_result.history
+            yield "data:{}\n\n".format(resp[last_print_len:])
+            last_print_len = len(resp)
 
-        await websocket.send_text(
-            json.dumps(
+        yield "data:{}\n\n".format(json.dumps(
+            {
+                "question": question,
+                "response": resp,
+                "history": history,
+                "sources_documents": [],
+            },
+            ensure_ascii=False,
+        ))
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+#lhy add
+async def http_stream_chat(
+        knowledge_base_id: str = Body(..., description="Knowledge Base Name", example="kb1"),
+        question: str = Body(..., description="Question", example="工伤保险是什么？"),
+        history: List[List[str]] = Body(
+            [],
+            description="History of previous questions and answers",
+            example=[
+                [
+                    "工伤保险是什么？",
+                    "工伤保险是指用人单位按照国家规定，为本单位的职工和用人单位的其他人员，缴纳工伤保险费，由保险机构按照国家规定的标准，给予工伤保险待遇的社会保险制度。",
+                ]
+            ],
+        ),
+):
+    vs_path = get_vs_path(knowledge_base_id)
+    if not os.path.exists(vs_path):
+        return ChatMessage(
+            question=question,
+            response=f"Knowledge base {knowledge_base_id} not found",
+            history=history,
+            source_documents=[],
+        )
+    else:
+        async def event_stream():
+            last_print_len = 0
+            nonlocal history #lhy
+            for resp, history in local_doc_qa.get_knowledge_based_answer(
+                    query=question, vs_path=vs_path, chat_history=history, streaming=True
+            ):
+                yield "data:{}\n\n".format(resp["result"][last_print_len:])
+                last_print_len = len(resp["result"])
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+
+#lhyadd
+async def chat_with_msg(
+        knowledge_base_id: str = Body(..., description="Knowledge Base Name", example="kb1"),
+        question: str = Body(..., description="Question", example="工伤保险是什么？"),
+        history: List[List[str]] = Body(
+            [],
+            description="History of previous questions and answers",
+            example=[
+                [
+                    "工伤保险是什么？",
+                    "工伤保险是指用人单位按照国家规定，为本单位的职工和用人单位的其他人员，缴纳工伤保险费，由保险机构按照国家规定的标准，给予工伤保险待遇的社会保险制度。",
+                ]
+            ],
+        ),
+):
+    vs_path = get_vs_path(knowledge_base_id)
+    if not os.path.exists(vs_path):
+        return ChatMessage(
+            question=question,
+            response=f"Knowledge base {knowledge_base_id} not found",
+            history=history,
+            source_documents=[],
+        )
+    else:
+        async def event_stream():
+            turn = 1
+            await asyncio.sleep(0)  # Give control to the event loop
+            # yield json.dumps({"question": question, "turn": turn, "flag": "start"}) + "\n\n"
+            # yield "data:{}\n\n".format(json.dumps({"question": question, "turn": turn, "flag": "start"}, ensure_ascii=False)) #lhyadd
+            turn += 1
+
+            last_print_len = 0
+            nonlocal history
+            for resp, history in local_doc_qa.get_knowledge_based_answer(
+                    query=question, vs_path=vs_path, chat_history=history, streaming=True
+            ):
+                await asyncio.sleep(0)  # Give control to the event loop
+                yield "data:{}\n\n".format(resp["result"][last_print_len:])
+                last_print_len = len(resp["result"])
+
+            source_documents = [
+                f"""出处 [{inum + 1}] {os.path.split(doc.metadata['source'])[-1]}：\n\n{doc.page_content}\n\n"""
+                f"""相关度：{doc.metadata['score']}\n\n"""
+                for inum, doc in enumerate(resp["source_documents"])
+            ]
+
+            # lhy modify: 只有将json放入到sse格式中才能输出
+            yield "data:{}\n\n".format(json.dumps(
                 {
                     "question": question,
-                    "turn": turn,
-                    "flag": "end",
+                    "response": resp["result"],
+                    "history": history,
+                    # "turn": turn,
+                    # "flag": "end",
                     "sources_documents": source_documents,
                 },
                 ensure_ascii=False,
-            )
-        )
-        turn += 1
+            ))
+
+            # yield "data:{}\n\n".format(source_documents)
+            await asyncio.sleep(1)
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+
+# async def stream_chat(websocket: WebSocket, knowledge_base_id: str):
+#     await websocket.accept()
+#     turn = 1
+#     while True:
+#         input_json = await websocket.receive_json()
+#         question, history, knowledge_base_id = input_json["question"], input_json["history"], input_json[
+#             "knowledge_base_id"]
+#         vs_path = get_vs_path(knowledge_base_id)
+#
+#         if not os.path.exists(vs_path):
+#             await websocket.send_json({"error": f"Knowledge base {knowledge_base_id} not found"})
+#             await websocket.close()
+#             return
+#
+#         await websocket.send_json({"question": question, "turn": turn, "flag": "start"})
+#
+#         last_print_len = 0
+#         for resp, history in local_doc_qa.get_knowledge_based_answer(
+#                 query=question, vs_path=vs_path, chat_history=history, streaming=True
+#         ):
+#             await asyncio.sleep(0)
+#             await websocket.send_text(resp["result"][last_print_len:])
+#             last_print_len = len(resp["result"])
+#
+#         source_documents = [
+#             f"""出处 [{inum + 1}] {os.path.split(doc.metadata['source'])[-1]}：\n\n{doc.page_content}\n\n"""
+#             f"""相关度：{doc.metadata['score']}\n\n"""
+#             for inum, doc in enumerate(resp["source_documents"])
+#         ]
+#
+#         await websocket.send_text(
+#             json.dumps(
+#                 {
+#                     "question": question,
+#                     "turn": turn,
+#                     "flag": "end",
+#                     "sources_documents": source_documents,
+#                 },
+#                 ensure_ascii=False,
+#             )
+#         )
+#         turn += 1
+
+# # lhyadd authorize
+# valid_api_keys = ["key1", "key2", "key3"]
+#
+#
+# # 自定义的密钥访问控制中间件
+# class APIKeyMiddleware:
+#     def __init__(self, api_keys: List[str]):
+#         self.api_keys = api_keys
+#
+#     async def __call__(self, request: Request, call_next):
+#         api_key = request.headers.get("X-API-Key")
+#         if api_key not in self.api_keys:
+#             return PlainTextResponse("Unauthorized", status_code=401)
+#         return await call_next(request)
+#
+#
+# # 创建 APIKeyMiddleware 实例
+# api_key_middleware = APIKeyMiddleware(api_keys=valid_api_keys)
+
 
 
 async def document():
@@ -429,12 +581,15 @@ def api_start(host, port):
             allow_methods=["*"],
             allow_headers=["*"],
         )
-    app.websocket("/local_doc_qa/stream-chat/{knowledge_base_id}")(stream_chat)
+    # app.websocket("/local_doc_qa/stream-chat/{knowledge_base_id}")(stream_chat)
 
+    # # 将中间件添加到 FastAPI 实例中 lhyadd authorize
+    # app.middleware("http")(api_key_middleware)
     app.get("/", response_model=BaseResponse)(document)
 
     app.post("/chat", response_model=ChatMessage)(chat)
-
+    app.post("/local_doc_qa/chat", response_model=ChatMessage)(http_stream_chat)  # lhyadd
+    app.post("/local_doc_qa/chat_with_msg", response_model=ChatMessage)(chat_with_msg)#lhyadd
     app.post("/local_doc_qa/upload_file", response_model=BaseResponse)(upload_file)
     app.post("/local_doc_qa/upload_files", response_model=BaseResponse)(upload_files)
     app.post("/local_doc_qa/local_doc_chat", response_model=ChatMessage)(local_doc_chat)

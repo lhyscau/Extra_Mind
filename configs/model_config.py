@@ -16,13 +16,13 @@ embedding_model_dict = {
     "ernie-tiny": "nghuyong/ernie-3.0-nano-zh",
     "ernie-base": "nghuyong/ernie-3.0-base-zh",
     "text2vec-base": "shibing624/text2vec-base-chinese",
-    "text2vec": "GanymedeNil/text2vec-large-chinese",
+    "text2vec": "D:/project/langchain_glm6b/model/text2vec",
     "m3e-small": "moka-ai/m3e-small",
-    "m3e-base": "moka-ai/m3e-base",
+    "m3e-base": "model/m3e-base",
 }
 
 # Embedding model name
-EMBEDDING_MODEL = "text2vec"
+EMBEDDING_MODEL = "m3e-base"
 
 # Embedding running device
 EMBEDDING_DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -42,8 +42,8 @@ llm_model_dict = {
     },
     "chatglm-6b-int4": {
         "name": "chatglm-6b-int4",
-        "pretrained_model_name": "THUDM/chatglm-6b-int4",
-        "local_model_path": None,
+        "pretrained_model_name": "model/chatglm-6b-int4",
+        "local_model_path": "model/chatglm-6b-int4",
         "provides": "ChatGLM"
     },
     "chatglm-6b-int8": {
@@ -60,8 +60,8 @@ llm_model_dict = {
     },
     "chatglm2-6b": {
         "name": "chatglm2-6b",
-        "pretrained_model_name": "THUDM/chatglm2-6b",
-        "local_model_path": None,
+        "pretrained_model_name": "model/chatglm2-6b",
+        "local_model_path": "model/chatglm2-6b",
         "provides": "ChatGLM"
     },
     "chatglm2-6b-int4": {
@@ -122,11 +122,13 @@ llm_model_dict = {
 }
 
 # LLM 名称
-LLM_MODEL = "chatglm-6b"
+LLM_MODEL = "chatglm2-6b"
+#lhy_add 如果你需要加载本地的model，指定这个参数 为true
+NO_REMOTE_MODEL = True
 # 量化加载8bit 模型
 LOAD_IN_8BIT = False
 # Load the model with bfloat16 precision. Requires NVIDIA Ampere GPU.
-BF16 = False
+BF16 = True
 # 本地lora存放的位置
 LORA_DIR = "loras/"
 
@@ -147,19 +149,59 @@ LLM_DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mp
 KB_ROOT_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "knowledge_base")
 
 # 基于上下文的prompt模版，请务必保留"{question}"和"{context}"
-PROMPT_TEMPLATE = """已知信息：
-{context} 
+PROMPT_TEMPLATE = """
+已知信息：
+"{context}"
 
-根据上述已知信息，简洁和专业的来回答用户的问题。如果无法从中得到答案，请说 “根据已知信息无法回答该问题” 或 “没有提供足够的相关信息”，不允许在答案中添加编造成分，答案请使用中文。 问题是：{question}"""
+问题是：
+"{question}"
+
+你是一个宅基地法律专家。你的任务是根据上述已知信息，针对问题，以下面使用三个单引号引用的格式回答用户的问题,不允许在答案中添加编造成分，答案请使用中文。
+
+回答格式参考下面三个单引号括起来的内容，每个段落另起一行：
+'''
+Paragraph one：
+对问题进行字面意思回答。
+
+Paragraph two：
+对问题进一步详细专业的回答。
+
+Paragraph three：
+总结回答。
+'''
+"""
+
+
+# 以下是一个例子：
+# 问题一是："农村宅基地归谁所有？"
+#
+# 回答是：
+# '''
+# 农村宅基地归农村集体所有。在中国的农村地区，土地资源归农村集体所有，而不是个人所有。农村集体所有制是中国农村土地制度的基本特征之一。
+#
+# 农村宅基地政策规定，农民可以在农村集体所有的土地上获得宅基地使用权，用于建造住房及其附属设施。这意味着农民个人或农民家庭可以在宅基地上建房，并享有使用权，但并不拥有土地的所有权。土地的所有权仍归农村集体。
+#
+# 宅基地使用权通常可以世代相传，但在不同地区和政策下可能存在差异。政府制定这样的政策是为了保障农民的住房权益，同时也确保农村土地资源的合理利用，促进农村的可持续发展。
+# '''
+#
+# 问题是："{question}"
+# 回答是：
+
+# PROMPT_TEMPLATE = """已知信息：
+# {context}
+#
+# 根据上述已知信息，简洁和专业的来回答用户的问题。如果无法从中得到答案，请说 “根据已知信息无法回答该问题” 或 “没有提供足够的相关信息”，不允许在答案中添加编造成分，答案请使用中文。
+#
+# 问题是：{question}"""
 
 # 缓存知识库数量,如果是ChatGLM2,ChatGLM2-int4,ChatGLM2-int8模型若检索效果不好可以调成’10’
-CACHED_VS_NUM = 1
+CACHED_VS_NUM = 10
 
 # 文本分句长度
 SENTENCE_SIZE = 100
 
 # 匹配后单段上下文长度
-CHUNK_SIZE = 250
+CHUNK_SIZE = 555
 
 # 传入LLM的历史记录长度
 LLM_HISTORY_LEN = 3
@@ -168,7 +210,7 @@ LLM_HISTORY_LEN = 3
 VECTOR_SEARCH_TOP_K = 5
 
 # 知识检索内容相关度 Score, 数值范围约为0-1100，如果为0，则不生效，经测试设置为小于500时，匹配结果更精准
-VECTOR_SEARCH_SCORE_THRESHOLD = 0
+VECTOR_SEARCH_SCORE_THRESHOLD = 200
 
 NLTK_DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "nltk_data")
 
@@ -184,7 +226,7 @@ flagging username: {FLAG_USER_NAME}
 
 # 是否开启跨域，默认为False，如果需要开启，请设置为True
 # is open cross domain
-OPEN_CROSS_DOMAIN = False
+OPEN_CROSS_DOMAIN = True
 
 # Bing 搜索必备变量
 # 使用 Bing 搜索需要使用 Bing Subscription Key,需要在azure port中申请试用bing search
